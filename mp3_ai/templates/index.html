@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple MP3 Trimmer</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f4f9; color: #333; max-width: 600px; margin: 50px auto; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { color: #5a5a5a; text-align: center; }
+        form { display: flex; flex-direction: column; gap: 15px; }
+        input, button { padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
+        button { background-color: #007bff; color: white; cursor: pointer; border: none; font-size: 16px; }
+        button:hover { background-color: #0056b3; }
+        .download-section { text-align: center; margin-top: 30px; }
+        .download-link { display: inline-block; padding: 12px 25px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; }
+        .flash-message { padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 5px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>✂️ Simple MP3 Trimmer</h1>
+
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            {% for message in messages %}
+                <div class="flash-message">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <form method="post" enctype="multipart/form-data">
+        <label for="file">Choose MP3 file:</label>
+        <input type="file" name="file" accept=".mp3" required>
+
+        <label for="start">Start Time (in seconds):</label>
+        <input type="number" name="start" value="0" min="0" required>
+
+        <label for="end">End Time (in seconds):</label>
+        <input type="number" name="end" min="1" required>
+
+        <button type="submit">Trim Song</button>
+    </form>
+
+    {% if filename %}
+        <div class="download-section">
+            <h2>Your trimmed song is ready!</h2>
+            <a href="{{ url_for('download_file', filename=filename) }}" class="download-link">Download Trimmed MP3</a>
+        </div>
+    {% endif %}
+</body>
+</html>

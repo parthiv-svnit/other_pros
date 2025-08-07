@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MX Player - Desktop Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
+        .controls-bar { opacity: 1; visibility: visible; transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out; }
+        .video-container.inactive .controls-bar, .video-container.locked .controls-bar { opacity: 0; visibility: hidden; }
+        .video-container.inactive { cursor: none; }
+        .video-container.locked.inactive { cursor: none; }
+        .progress-bar { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; background: rgba(255, 255, 255, 0.3); outline: none; transition: height 0.2s ease; cursor: pointer; }
+        .progress-bar:hover { height: 6px; }
+        .progress-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; background: #3b82f6; border-radius: 50%; cursor: pointer; }
+        .side-panel { transition: transform 0.3s ease-in-out; transform: translateX(100%); }
+        .side-panel.open { transform: translateX(0); }
+        .track-button.active { background-color: #3b82f6; }
+        #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); z-index: 10000; }
+        video::cue {
+            background-color: transparent;
+            color: white;
+            font-size: 1.3em;
+            text-shadow: 1px 1px 2px #000, -1px 1px 2px #000, 1px -1px 2px #000, -1px -1px 2px #000;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        #unlock-btn { position: absolute; top: 1.5rem; right: 1.5rem; background: rgba(0,0,0,0.7); color: white; width: 50px; height: 50px; border-radius: 50%; z-index: 9999; cursor: pointer; display: none; align-items: center; justify-content: center; opacity: 1; transition: opacity 0.3s ease-in-out; }
+        .video-container.locked #unlock-btn { display: flex; }
+        .video-container.locked.inactive #unlock-btn { opacity: 0; }
+
+        #app-container.is-fullscreen .bottom-controls {
+            position: absolute;
+            bottom: 5%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 800px;
+            background-color: rgba(0,0,0,0.6);
+            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        
+        #app-container.is-fullscreen .top-controls {
+            opacity: 0;
+            visibility: hidden;
+            transition: none;
+        }
+        #app-container.is-fullscreen .video-container.active .top-controls {
+            opacity: 1;
+            visibility: visible;
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+        }
+        
+        .progress-bar-wrapper { position: relative; }
+        #preview-canvas { position: absolute; bottom: 12px; border: 2px solid white; border-radius: 4px; pointer-events: none; transform: translateX(-50%); display: none; }
+        #progress-tooltip { position: absolute; bottom: 115px; background-color: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; transform: translateX(-50%); display: none; }
+
+        #track-notification {
+            pointer-events: none;
+            transition: opacity 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="overflow-hidden">
+
+    <div id="app-container" class="w-full h-screen flex flex-col items-center justify-center bg-[#121212]">
+        
+        <div id="local-file-section" class="text-center p-8">
+            <h1 class="text-5xl font-bold text-white mb-4"><span class="text-blue-500">MX</span> Player</h1>
+            <p class="text-gray-400 mb-8 text-lg">Your Personal Video Player</p>
+            <button id="open-file-btn" class="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-700 transition text-xl shadow-lg shadow-blue-500/20">
+                <i class="fas fa-folder-open mr-3"></i> Open Video(s)
+            </button>
+            <p id="api-error-message" class="text-red-500 mt-4 font-semibold hidden">Error: Could not initialize the application's backend. Please try restarting.</p>
+        </div>
+
+        <div id="video-player-section" class="w-full h-full bg-black hidden">
+            <div id="video-container" class="relative w-full h-full bg-black video-container">
+                <video id="main-video" class="w-full h-full object-contain"></video>
+                <video id="preview-video" muted class="hidden absolute"></video>
+                <audio id="main-audio"></audio>
+                
+                <div id="track-notification" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-lg z-50 opacity-0"></div>
+
+                <div class="controls-bar top-controls absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-20">
+                    <div class="flex items-center justify-between w-full">
+                        <div class="flex items-center space-x-4 flex-1 min-w-0">
+                            <button id="back-btn" class="text-white text-xl px-2 flex-shrink-0"><i class="fas fa-arrow-left"></i></button>
+                            <h2 id="video-title" class="text-white text-lg font-semibold truncate"></h2>
+                        </div>
+                        <div class="flex items-center space-x-5 flex-shrink-0">
+                            <button id="audio-tracks-btn" class="text-white text-xl"><i class="fas fa-music"></i></button>
+                            <button id="subtitle-tracks-btn" class="text-white text-xl"><i class="fas fa-closed-captioning"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls-bar bottom-controls w-full absolute bottom-0 left-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-20">
+                    <div class="w-full mb-3 progress-bar-wrapper">
+                        <canvas id="preview-canvas" width="160" height="90"></canvas>
+                        <div id="progress-tooltip">00:00</div>
+                        <div class="flex justify-between items-center text-xs font-mono text-white px-1"><span id="current-time">00:00</span><span id="total-time" class="cursor-pointer">00:00</span></div>
+                        <input type="range" id="progress-bar" class="progress-bar" value="0" min="0" max="100">
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <button id="lock-btn" class="text-white text-2xl px-2"><i class="fas fa-lock"></i></button>
+                        <div class="flex items-center justify-center space-x-6">
+                            <button id="seek-backward-10-btn" class="text-white text-2xl"><i class="fas fa-undo"></i></button>
+                            <button id="prev-btn" class="text-white text-3xl"><i class="fas fa-backward-step"></i></button>
+                            <button id="play-pause-btn" class="text-white text-5xl"><i class="fas fa-play-circle"></i></button>
+                            <button id="next-btn" class="text-white text-3xl"><i class="fas fa-forward-step"></i></button>
+                            <button id="seek-forward-10-btn" class="text-white text-2xl"><i class="fas fa-redo"></i></button>
+                        </div>
+                        <button id="fullscreen-btn" class="text-white text-2xl px-2"><i class="fas fa-expand-arrows-alt"></i></button>
+                    </div>
+                </div>
+                
+                <button id="unlock-btn"><i class="fas fa-lock-open fa-lg"></i></button>
+
+                <div id="audio-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4"><h3 class="text-lg font-bold mb-4">Audio Tracks</h3><div id="audio-tracks-list" class="space-y-2"></div></div>
+                <div id="subtitle-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4"><h3 class="text-lg font-bold mb-4">Subtitle Tracks</h3><div id="subtitle-tracks-list" class="space-y-2"></div><button id="custom-subtitle-btn" class="w-full text-left font-semibold bg-gray-700/50 p-3 rounded flex items-center justify-between mt-4"><span>Load Custom</span><i class="fas fa-plus"></i></button></div>
+            </div>
+        </div>
+
+        <div id="processing-overlay" class="hidden"><div class="text-white text-center"><i class="fas fa-spinner fa-spin fa-3x mb-4"></i><p id="processing-message" class="text-lg">Processing...</p></div></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!window.electronAPI) {
+                const errorMsg = document.getElementById('api-error-message');
+                if (errorMsg) errorMsg.classList.remove('hidden');
+                console.error("Fatal Error: The Electron Preload API is not available.");
+                return;
+            }
+
+            const elements = {
+                appContainer: document.getElementById('app-container'),
+                localFileSection: document.getElementById('local-file-section'),
+                videoPlayerSection: document.getElementById('video-player-section'),
+                video: document.getElementById('main-video'),
+                previewVideo: document.getElementById('preview-video'),
+                previewCanvas: document.getElementById('preview-canvas'),
+                progressTooltip: document.getElementById('progress-tooltip'),
+                audio: document.getElementById('main-audio'),
+                videoContainer: document.getElementById('video-container'),
+                videoTitle: document.getElementById('video-title'),
+                playPauseBtn: document.getElementById('play-pause-btn'),
+                progressBar: document.getElementById('progress-bar'),
+                currentTimeDisplay: document.getElementById('current-time'),
+                totalTimeDisplay: document.getElementById('total-time'),
+                fullscreenBtn: document.getElementById('fullscreen-btn'),
+                backBtn: document.getElementById('back-btn'),
+                openFileBtn: document.getElementById('open-file-btn'),
+                nextBtn: document.getElementById('next-btn'),
+                prevBtn: document.getElementById('prev-btn'),
+                lockBtn: document.getElementById('lock-btn'),
+                unlockBtn: document.getElementById('unlock-btn'),
+                seekBackward10Btn: document.getElementById('seek-backward-10-btn'),
+                seekForward10Btn: document.getElementById('seek-forward-10-btn'),
+                audioTracksBtn: document.getElementById('audio-tracks-btn'),
+                audioTracksPanel: document.getElementById('audio-tracks-panel'),
+                audioTracksList: document.getElementById('audio-tracks-list'),
+                subtitleTracksBtn: document.getElementById('subtitle-tracks-btn'),
+                subtitleTracksPanel: document.getElementById('subtitle-tracks-panel'),
+                subtitleTracksList: document.getElementById('subtitle-tracks-list'),
+                customSubtitleBtn: document.getElementById('custom-subtitle-btn'),
+                processingOverlay: document.getElementById('processing-overlay'),
+                processingMessage: document.getElementById('processing-message'),
+                trackNotification: document.getElementById('track-notification'),
+            };
+
+            let playlist = [], currentVideoIndex = 0, mediaInfo = {}, inactivityTimer, showRemainingTime = false, trackNotificationTimer, extractedStreamCache = {};
+
+            const showProcessing = (message) => {
+                elements.processingMessage.textContent = message;
+                elements.processingOverlay.classList.remove('hidden');
+            };
+            const hideProcessing = () => elements.processingOverlay.classList.add('hidden');
+            
+            const showTrackNotification = (message) => {
+                clearTimeout(trackNotificationTimer);
+                elements.trackNotification.textContent = message;
+                elements.trackNotification.style.opacity = '1';
+                trackNotificationTimer = setTimeout(() => {
+                    elements.trackNotification.style.opacity = '0';
+                }, 1500);
+            };
+
+            const hideControls = () => {
+                const isFullScreen = elements.appContainer.classList.contains('is-fullscreen');
+                if (!elements.video.paused || isFullScreen || elements.videoContainer.classList.contains('locked')) {
+                    elements.videoContainer.classList.add('inactive');
+                }
+            };
+            const resetInactivityTimer = () => {
+                elements.videoContainer.classList.remove('inactive');
+                clearTimeout(inactivityTimer);
+                const isFullScreen = elements.appContainer.classList.contains('is-fullscreen');
+                if (!elements.video.paused || isFullScreen || elements.videoContainer.classList.contains('locked')) {
+                    inactivityTimer = setTimeout(hideControls, 1500);
+                }
+            };
+
+            const formatTime = (timeInSeconds) => {
+                if (isNaN(timeInSeconds)) return '00:00';
+                const totalDuration = elements.video.duration;
+                
+                const hours = Math.floor(timeInSeconds / 3600);
+                const minutes = Math.floor((timeInSeconds % 3600) / 60);
+                const seconds = Math.floor(timeInSeconds % 60);
+
+                const formattedMinutes = String(minutes).padStart(2, '0');
+                const formattedSeconds = String(seconds).padStart(2, '0');
+
+                if (totalDuration >= 3600) {
+                    return `${String(hours).padStart(2, '0')}:${formattedMinutes}:${formattedSeconds}`;
+                }
+                return `${formattedMinutes}:${formattedSeconds}`;
+            };
+
+            const playFileFromPlaylist = async (index) => {
+                if (index < 0 || index >= playlist.length) return;
+                currentVideoIndex = index;
+                const filePath = playlist[currentVideoIndex];
+                
+                elements.localFileSection.classList.add('hidden');
+                elements.videoPlayerSection.classList.remove('hidden');
+                elements.video.src = 'file://' + filePath;
+                elements.previewVideo.src = 'file://' + filePath;
+                elements.audio.src = '';
+                elements.video.play();
+                
+                elements.videoTitle.textContent = pathHelper.basename(filePath);
+                updatePlaylistControls();
+                extractedStreamCache = {};
+
+                try {
+                    const data = await window.electronAPI.analyzeFile(filePath);
+                    mediaInfo = data;
+                    buildTrackUI();
+                } catch (error) {
+                    alert(error);
+                }
+            };
+
+            const buildTrackUI = () => {
+                const { streams } = mediaInfo.info;
+                const audioStreams = streams.filter(s => s.codec_type === 'audio');
+                const subtitleStreams = streams.filter(s => s.codec_type === 'subtitle');
+
+                elements.audioTracksList.innerHTML = '';
+                audioStreams.forEach((stream, i) => {
+                    const isDefault = i === 0;
+                    const label = stream.tags?.title || stream.tags?.language || `Track ${i + 1}`;
+                    const fullLabel = isDefault ? `${label} (Default)` : label;
+                    
+                    const btn = document.createElement('button');
+                    btn.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button whitespace-normal';
+                    btn.textContent = fullLabel;
+
+                    if (isDefault) {
+                        btn.classList.add('active');
+                        btn.onclick = () => {
+                            document.querySelectorAll('#audio-tracks-list .track-button').forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            elements.video.muted = false;
+                            elements.audio.src = '';
+                            showTrackNotification(label);
+                        };
+                    } else {
+                        btn.onclick = async () => {
+                            document.querySelectorAll('#audio-tracks-list .track-button').forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            
+                            if (extractedStreamCache[stream.index]) {
+                                elements.audio.src = extractedStreamCache[stream.index];
+                            } else {
+                                showProcessing(`Preparing audio: ${label}...`);
+                                const tempPath = await window.electronAPI.extractStream({ filePath: mediaInfo.filePath, stream });
+                                extractedStreamCache[stream.index] = 'file://' + tempPath;
+                                elements.audio.src = 'file://' + tempPath;
+                                hideProcessing();
+                            }
+
+                            elements.video.muted = true;
+                            elements.audio.currentTime = elements.video.currentTime;
+                            if (!elements.video.paused) elements.audio.play();
+                            showTrackNotification(label);
+                        };
+                    }
+                    elements.audioTracksList.appendChild(btn);
+                });
+
+                elements.subtitleTracksList.innerHTML = '';
+                const offBtn = document.createElement('button');
+                offBtn.className = 'w-full text-left font-semibold p-3 rounded track-button active whitespace-normal';
+                offBtn.textContent = 'Off';
+                offBtn.onclick = () => {
+                    document.querySelectorAll('#subtitle-tracks-list .track-button').forEach(b => b.classList.remove('active'));
+                    offBtn.classList.add('active');
+                    disableAllTextTracks();
+                    showTrackNotification('Subtitles Off');
+                };
+                elements.subtitleTracksList.appendChild(offBtn);
+
+                subtitleStreams.forEach((stream, i) => {
+                    addSubtitleButton(stream, stream.tags?.title || `Track ${i + 1}`);
+                });
+            };
+
+            const addSubtitleButton = (streamOrPath, label) => {
+                const btn = document.createElement('button');
+                btn.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button whitespace-normal';
+                btn.textContent = label;
+                btn.onclick = async () => {
+                    document.querySelectorAll('#subtitle-tracks-list .track-button').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    let tempPath;
+                    if (typeof streamOrPath === 'string') {
+                        tempPath = streamOrPath;
+                    } else {
+                        if (extractedStreamCache[streamOrPath.index]) {
+                            tempPath = extractedStreamCache[streamOrPath.index];
+                        } else {
+                            showProcessing(`Preparing subtitle: ${label}...`);
+                            tempPath = await window.electronAPI.extractStream({ filePath: mediaInfo.filePath, stream: streamOrPath });
+                            extractedStreamCache[streamOrPath.index] = tempPath;
+                            hideProcessing();
+                        }
+                    }
+                    addTextTrack(tempPath, label, true);
+                    showTrackNotification(label);
+                };
+                elements.subtitleTracksList.appendChild(btn);
+            };
+
+            const addTextTrack = (filePath, label, makeActive = false) => {
+                disableAllTextTracks();
+                const track = document.createElement('track');
+                track.src = 'file://' + filePath;
+                track.kind = 'subtitles';
+                track.label = label;
+                track.default = makeActive;
+                elements.video.appendChild(track);
+                track.addEventListener('load', () => { track.mode = 'showing'; });
+            };
+
+            const disableAllTextTracks = () => {
+                Array.from(elements.video.textTracks).forEach(t => t.mode = 'hidden');
+                const existingTracks = elements.video.querySelectorAll('track');
+                existingTracks.forEach(t => t.remove());
+            };
+            
+            const seekVideo = (seconds) => {
+                if (!isNaN(elements.video.duration)) {
+                    elements.video.currentTime += seconds;
+                }
+            };
+            
+            const updateTimeDisplay = () => {
+                if (isNaN(elements.video.duration)) return;
+                elements.currentTimeDisplay.textContent = formatTime(elements.video.currentTime);
+                if (showRemainingTime) {
+                    const remaining = elements.video.duration - elements.video.currentTime;
+                    elements.totalTimeDisplay.textContent = `-${formatTime(remaining)}`;
+                } else {
+                    elements.totalTimeDisplay.textContent = formatTime(elements.video.duration);
+                }
+            };
+
+            const cycleTracks = (selector) => {
+                const buttons = document.querySelectorAll(selector);
+                if (buttons.length <= 1) return;
+                let currentIndex = -1;
+                buttons.forEach((btn, index) => {
+                    if (btn.classList.contains('active')) currentIndex = index;
+                });
+                const nextIndex = (currentIndex + 1) % buttons.length;
+                buttons[nextIndex].click();
+            };
+
+            // --- UI Event Listeners ---
+            window.electronAPI.onProcessingUpdate((message) => showProcessing(message));
+            elements.openFileBtn.addEventListener('click', () => window.electronAPI.openFileDialog());
+            window.electronAPI.onFilesSelected((filePaths) => {
+                playlist = filePaths;
+                if (playlist.length > 0) playFileFromPlaylist(0);
+            });
+
+            elements.backBtn.addEventListener('click', () => {
+                elements.videoPlayerSection.classList.add('hidden');
+                elements.localFileSection.classList.remove('hidden');
+                elements.video.pause();
+                elements.video.src = '';
+                elements.audio.src = '';
+                if (elements.appContainer.classList.contains('is-fullscreen')) {
+                    window.electronAPI.toggleFullscreen();
+                }
+            });
+
+            elements.playPauseBtn.addEventListener('click', () => { elements.video.paused ? elements.video.play() : elements.video.pause(); });
+            elements.video.addEventListener('play', () => {
+                elements.playPauseBtn.innerHTML = `<i class="fas fa-pause-circle"></i>`;
+                if (elements.audio.src) elements.audio.play();
+                resetInactivityTimer();
+            });
+            elements.video.addEventListener('pause', () => {
+                elements.playPauseBtn.innerHTML = `<i class="fas fa-play-circle"></i>`;
+                elements.audio.pause();
+                clearTimeout(inactivityTimer);
+                elements.videoContainer.classList.remove('inactive');
+                if (elements.appContainer.classList.contains('is-fullscreen')) {
+                    resetInactivityTimer();
+                }
+            });
+            
+            elements.video.addEventListener('timeupdate', () => {
+                if (isNaN(elements.video.duration)) return;
+                elements.progressBar.value = (elements.video.currentTime / elements.video.duration) * 100;
+                updateTimeDisplay();
+                if (elements.audio.src && Math.abs(elements.video.currentTime - elements.audio.currentTime) > 0.2) {
+                    elements.audio.currentTime = elements.video.currentTime;
+                }
+            });
+            elements.progressBar.addEventListener('input', () => {
+                if (!isNaN(elements.video.duration)) {
+                    const newTime = (elements.progressBar.value / 100) * elements.video.duration;
+                    elements.video.currentTime = newTime;
+                    if (elements.audio.src) elements.audio.currentTime = newTime;
+                }
+            });
+            
+            elements.progressBar.addEventListener('mousemove', (e) => {
+                if (isNaN(elements.video.duration)) return;
+                const rect = elements.progressBar.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const percentage = x / rect.width;
+                const time = elements.video.duration * percentage;
+                
+                elements.progressTooltip.style.left = `${x}px`;
+                elements.progressTooltip.textContent = formatTime(time);
+                elements.progressTooltip.style.display = 'block';
+
+                elements.previewCanvas.style.left = `${x}px`;
+                elements.previewCanvas.style.display = 'block';
+                elements.previewVideo.currentTime = time;
+            });
+            elements.progressBar.addEventListener('mouseleave', () => {
+                elements.progressTooltip.style.display = 'none';
+                elements.previewCanvas.style.display = 'none';
+            });
+            elements.previewVideo.addEventListener('seeked', () => {
+                const ctx = elements.previewCanvas.getContext('2d');
+                ctx.drawImage(elements.previewVideo, 0, 0, 160, 90);
+            });
+
+            elements.totalTimeDisplay.addEventListener('click', () => {
+                showRemainingTime = !showRemainingTime;
+                updateTimeDisplay();
+            });
+
+            elements.fullscreenBtn.addEventListener('click', () => window.electronAPI.toggleFullscreen());
+            window.electronAPI.onFullscreenChanged((isFullScreen) => {
+                elements.appContainer.classList.toggle('is-fullscreen', isFullScreen);
+            });
+            
+            elements.nextBtn.addEventListener('click', () => playFileFromPlaylist(currentVideoIndex + 1));
+            elements.prevBtn.addEventListener('click', () => playFileFromPlaylist(currentVideoIndex - 1));
+            elements.seekBackward10Btn.addEventListener('click', () => seekVideo(-10));
+            elements.seekForward10Btn.addEventListener('click', () => seekVideo(10));
+
+            const togglePanel = (panel) => panel.classList.toggle('open');
+            elements.audioTracksBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(elements.audioTracksPanel); });
+            elements.subtitleTracksBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(elements.subtitleTracksPanel); });
+            elements.videoContainer.addEventListener('click', () => document.querySelectorAll('.side-panel.open').forEach(p => p.classList.remove('open')));
+            
+            elements.customSubtitleBtn.addEventListener('click', async () => {
+                const filePath = await window.electronAPI.openSubtitleDialog();
+                if (filePath) {
+                    addSubtitleButton(filePath, `Custom: ${pathHelper.basename(filePath)}`);
+                    const lastButton = elements.subtitleTracksList.lastChild;
+                    lastButton.click();
+                }
+            });
+            
+            elements.lockBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                elements.videoContainer.classList.add('locked');
+                resetInactivityTimer();
+            });
+            elements.unlockBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                elements.videoContainer.classList.remove('locked');
+                resetInactivityTimer();
+            });
+
+            elements.videoContainer.addEventListener('mousemove', resetInactivityTimer);
+            elements.videoContainer.addEventListener('mouseleave', hideControls);
+            
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || !elements.video.src) return;
+                if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+                
+                switch (e.key.toLowerCase()) {
+                    case 'f': window.electronAPI.toggleFullscreen(); break;
+                    case ' ': elements.playPauseBtn.click(); break;
+                    case 'arrowright': seekVideo(5); break;
+                    case 'arrowleft': seekVideo(-5); break;
+                    case 'b': cycleTracks('#audio-tracks-list .track-button'); break;
+                    case 'v': cycleTracks('#subtitle-tracks-list .track-button'); break;
+                }
+            });
+
+            const pathHelper = { basename: (p) => p.replace(/^.*[\\\/]/, '') };
+            
+            const updatePlaylistControls = () => {
+                elements.prevBtn.disabled = currentVideoIndex === 0;
+                elements.nextBtn.disabled = currentVideoIndex >= playlist.length - 1;
+                elements.prevBtn.style.opacity = elements.prevBtn.disabled ? '0.5' : '1';
+                elements.nextBtn.style.opacity = elements.nextBtn.disabled ? '0.5' : '1';
+            };
+        });
+    </script>
+</body>
+</html>

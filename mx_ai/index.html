@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MX Player Clone - Local Player</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .controls-bar { opacity: 1; transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out; visibility: visible; }
+        .video-container.inactive .controls-bar, .video-container.locked .controls-bar { opacity: 0; visibility: hidden; }
+        .video-container.inactive { cursor: none; }
+        .progress-bar-container { position: relative; width: 100%; }
+        .progress-bar { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; background: rgba(255, 255, 255, 0.3); outline: none; transition: height 0.2s ease; cursor: pointer; }
+        .progress-bar:hover { height: 6px; }
+        .progress-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; background: #3b82f6; border-radius: 50%; cursor: pointer; }
+        .player-lock-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9998; cursor: pointer; display: none; }
+        .video-container.locked .player-lock-overlay { display: block; }
+        .unlock-button { position: absolute; top: 2rem; right: 2rem; background: rgba(0,0,0,0.7); color: white; padding: 1rem; border-radius: 50%; z-index: 9999; cursor: pointer; }
+        #local-file-section.hidden, #video-player-section.hidden { display: none; }
+        .side-panel { transition: transform 0.3s ease-in-out; transform: translateX(100%); }
+        .side-panel.open { transform: translateX(0); }
+        .is-fullscreen .bottom-controls { position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%); width: 90%; max-width: 800px; background-color: rgba(0,0,0,0.6); border-radius: 12px; padding: 1rem; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .is-fullscreen .top-controls { display: none; }
+        .track-button.active { background-color: #3b82f6; }
+        #processing-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #processing-overlay.hidden { display: none; }
+        .error-message { color: #ef4444; background-color: rgba(239, 68, 68, 0.1); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; max-width: 80%; text-align: center; }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+    <div id="app-container" class="w-full h-screen flex flex-col items-center justify-center bg-[#121212]">
+        
+        <div id="local-file-section" class="text-center p-8">
+            <h1 class="text-5xl font-bold text-white mb-4"><span class="text-blue-500">MX</span> Player</h1>
+            <p class="text-gray-400 mb-8 text-lg">Your Personal Video Player</p>
+            <button id="open-file-btn" class="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-700 transition text-xl shadow-lg shadow-blue-500/20">
+                <i class="fas fa-folder-open mr-3"></i> Open Video
+            </button>
+            <input type="file" id="local-file-input" accept="video/*,.mkv" class="hidden">
+            <div id="file-error" class="error-message hidden mt-4"></div>
+        </div>
+
+        <div id="video-player-section" class="w-full h-full bg-black hidden">
+            <div id="video-container" class="relative w-full h-full bg-black video-container">
+                <video id="main-video" class="w-full h-full object-contain" crossorigin="anonymous"></video>
+                <audio id="main-audio"></audio>
+                
+                <div class="controls-bar top-controls absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-20">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-4">
+                            <button id="back-btn" class="text-white text-xl px-2"><i class="fas fa-arrow-left"></i></button>
+                            <h2 id="video-title" class="text-white text-lg font-semibold truncate max-w-xs md:max-w-md lg:max-w-lg"></h2>
+                        </div>
+                        <div class="flex items-center space-x-5">
+                            <button id="audio-tracks-btn" class="text-white text-xl"><i class="fas fa-music"></i></button>
+                            <button id="subtitle-tracks-btn" class="text-white text-xl"><i class="fas fa-closed-captioning"></i></button>
+                            <button id="menu-btn" class="text-white text-xl px-2"><i class="fas fa-ellipsis-v"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls-bar bottom-controls w-full absolute bottom-0 left-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-20">
+                    <div class="w-full mb-3">
+                         <div class="flex justify-between items-center text-xs font-mono text-white px-1">
+                            <span id="current-time">00:00</span>
+                            <span id="total-time" class="cursor-pointer" title="Click to show remaining time">00:00</span>
+                        </div>
+                        <div class="progress-bar-container px-0">
+                           <input type="range" id="progress-bar" class="progress-bar" value="0" min="0" max="100">
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <button id="lock-btn" class="text-white text-2xl px-2"><i class="fas fa-lock"></i></button>
+                        <div class="flex items-center justify-center space-x-6">
+                            <button id="seek-backward-10-btn" class="text-white text-2xl"><i class="fas fa-undo"></i></button>
+                            <button id="play-pause-btn" class="text-white text-5xl"><i class="fas fa-play-circle"></i></button>
+                            <button id="seek-forward-10-btn" class="text-white text-2xl"><i class="fas fa-redo"></i></button>
+                        </div>
+                        <button id="fullscreen-btn" class="text-white text-2xl px-2"><i class="fas fa-expand-arrows-alt"></i></button>
+                    </div>
+                </div>
+                
+                <div id="player-lock-overlay" class="player-lock-overlay">
+                    <button id="unlock-btn" class="unlock-button"><i class="fas fa-lock-open fa-lg"></i></button>
+                </div>
+
+                <div id="menu-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4">
+                    <h3 class="text-lg font-bold mb-4">Settings</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="text-gray-300 block mb-2">Playback Speed</label>
+                            <select id="playback-speed" class="w-full bg-gray-800 text-white p-2 rounded">
+                                <option value="0.5">0.5x</option>
+                                <option value="0.75">0.75x</option>
+                                <option value="1" selected>1x (Normal)</option>
+                                <option value="1.25">1.25x</option>
+                                <option value="1.5">1.5x</option>
+                                <option value="2">2x</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div id="audio-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4">
+                    <h3 class="text-lg font-bold mb-4">Audio Tracks</h3>
+                    <div id="audio-tracks-list" class="space-y-2"></div>
+                </div>
+                <div id="subtitle-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4">
+                    <h3 class="text-lg font-bold mb-4">Subtitle Tracks</h3>
+                    <div id="subtitle-tracks-list" class="space-y-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="processing-overlay" class="hidden">
+            <div class="text-white text-center">
+                <i class="fas fa-spinner fa-spin fa-3x mb-4"></i>
+                <p id="processing-message" class="text-lg">Processing video...</p>
+                <div id="processing-error" class="error-message hidden mt-4"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const SERVER_URL = 'http://localhost:3000';
+            // All element getters
+            const elements = {
+                appContainer: document.getElementById('app-container'),
+                localFileSection: document.getElementById('local-file-section'),
+                videoPlayerSection: document.getElementById('video-player-section'),
+                video: document.getElementById('main-video'),
+                audio: document.getElementById('main-audio'),
+                videoContainer: document.getElementById('video-container'),
+                videoTitle: document.getElementById('video-title'),
+                playPauseBtn: document.getElementById('play-pause-btn'),
+                progressBar: document.getElementById('progress-bar'),
+                currentTimeDisplay: document.getElementById('current-time'),
+                totalTimeDisplay: document.getElementById('total-time'),
+                fullscreenBtn: document.getElementById('fullscreen-btn'),
+                backBtn: document.getElementById('back-btn'),
+                lockBtn: document.getElementById('lock-btn'),
+                unlockBtn: document.getElementById('unlock-btn'),
+                openFileBtn: document.getElementById('open-file-btn'),
+                localFileInput: document.getElementById('local-file-input'),
+                seekBackward10Btn: document.getElementById('seek-backward-10-btn'),
+                seekForward10Btn: document.getElementById('seek-forward-10-btn'),
+                menuBtn: document.getElementById('menu-btn'),
+                audioTracksBtn: document.getElementById('audio-tracks-btn'),
+                subtitleTracksBtn: document.getElementById('subtitle-tracks-btn'),
+                menuPanel: document.getElementById('menu-panel'),
+                audioTracksPanel: document.getElementById('audio-tracks-panel'),
+                subtitleTracksPanel: document.getElementById('subtitle-tracks-panel'),
+                audioTracksList: document.getElementById('audio-tracks-list'),
+                subtitleTracksList: document.getElementById('subtitle-tracks-list'),
+                processingOverlay: document.getElementById('processing-overlay'),
+                processingMessage: document.getElementById('processing-message'),
+                processingError: document.getElementById('processing-error'),
+                fileError: document.getElementById('file-error'),
+                playbackSpeed: document.getElementById('playback-speed'),
+            };
+
+            let inactivityTimer, showRemainingTime = false;
+            let currentTrackData = null;
+            let isPlayerLocked = false;
+            let isFullscreen = false;
+
+            // Initialize the player
+            const initPlayer = () => {
+                resetInactivityTimer();
+                setupEventListeners();
+            };
+
+            const setupEventListeners = () => {
+                // Mouse movement detection for controls visibility
+                elements.videoContainer.addEventListener('mousemove', () => {
+                    if (!isPlayerLocked) {
+                        elements.videoContainer.classList.remove('inactive');
+                        resetInactivityTimer();
+                    }
+                });
+
+                // Video controls
+                elements.playPauseBtn.addEventListener('click', togglePlayPause);
+                elements.video.addEventListener('click', togglePlayPause);
+                elements.video.addEventListener('play', () => {
+                    elements.playPauseBtn.innerHTML = '<i class="fas fa-pause-circle"></i>';
+                    elements.audio.play().catch(e => console.error('Audio play error:', e));
+                });
+                elements.video.addEventListener('pause', () => {
+                    elements.playPauseBtn.innerHTML = '<i class="fas fa-play-circle"></i>';
+                    elements.audio.pause();
+                });
+                elements.video.addEventListener('timeupdate', updateProgressBar);
+                elements.video.addEventListener('loadedmetadata', updateDurationDisplay);
+                elements.video.addEventListener('ended', () => {
+                    elements.playPauseBtn.innerHTML = '<i class="fas fa-play-circle"></i>';
+                });
+                elements.video.addEventListener('error', (e) => {
+                    console.error('Video error:', e);
+                    showError('Failed to load video. Please try another file.');
+                });
+                elements.audio.addEventListener('error', (e) => {
+                    console.error('Audio error:', e);
+                });
+
+                // Progress bar
+                elements.progressBar.addEventListener('input', seekVideo);
+                elements.progressBar.addEventListener('change', seekVideo);
+
+                // Time display click to toggle remaining/total time
+                elements.totalTimeDisplay.addEventListener('click', () => {
+                    showRemainingTime = !showRemainingTime;
+                    updateDurationDisplay();
+                });
+
+                // Navigation buttons
+                elements.backBtn.addEventListener('click', showFileSelection);
+                elements.fullscreenBtn.addEventListener('click', toggleFullscreen);
+                elements.lockBtn.addEventListener('click', togglePlayerLock);
+                elements.unlockBtn.addEventListener('click', togglePlayerLock);
+                elements.openFileBtn.addEventListener('click', () => elements.localFileInput.click());
+                elements.localFileInput.addEventListener('change', handleFileSelect);
+
+                // Seek buttons
+                elements.seekBackward10Btn.addEventListener('click', () => seekRelative(-10));
+                elements.seekForward10Btn.addEventListener('click', () => seekRelative(10));
+
+                // Panels
+                elements.menuBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    togglePanel(elements.menuPanel);
+                });
+                elements.audioTracksBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    togglePanel(elements.audioTracksPanel);
+                });
+                elements.subtitleTracksBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    togglePanel(elements.subtitleTracksPanel);
+                });
+                elements.videoContainer.addEventListener('click', closeAllPanels);
+
+                // Playback speed
+                elements.playbackSpeed.addEventListener('change', (e) => {
+                    const speed = parseFloat(e.target.value);
+                    elements.video.playbackRate = speed;
+                    elements.audio.playbackRate = speed;
+                });
+
+                // Fullscreen change detection
+                document.addEventListener('fullscreenchange', () => {
+                    isFullscreen = !!document.fullscreenElement;
+                    elements.videoContainer.classList.toggle('is-fullscreen', isFullscreen);
+                });
+            };
+
+            const resetInactivityTimer = () => {
+                clearTimeout(inactivityTimer);
+                inactivityTimer = setTimeout(() => {
+                    if (!isPlayerLocked && !isFullscreen) {
+                        elements.videoContainer.classList.add('inactive');
+                    }
+                }, 3000);
+            };
+
+            const togglePanel = (panel) => {
+                document.querySelectorAll('.side-panel.open').forEach(p => {
+                    if (p !== panel) p.classList.remove('open');
+                });
+                if (panel) panel.classList.toggle('open');
+            };
+
+            const closeAllPanels = () => {
+                document.querySelectorAll('.side-panel.open').forEach(p => {
+                    p.classList.remove('open');
+                });
+            };
+
+            const playFile = async (file) => {
+                // Validate file
+                if (!file) {
+                    showError('No file selected');
+                    return;
+                }
+
+                // Check file size (500MB limit)
+                if (file.size > 500 * 1024 * 1024) {
+                    showError('File size exceeds 500MB limit');
+                    return;
+                }
+
+                showProcessing('Uploading and processing video...');
+                showMediaPlayer();
+
+                const formData = new FormData();
+                formData.append('video', file);
+
+                try {
+                    const response = await fetch(`${SERVER_URL}/upload`, {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok || !data.success) {
+                        throw new Error(data.error || 'Server processing failed');
+                    }
+
+                    currentTrackData = data;
+                    elements.videoTitle.textContent = data.filename || file.name;
+
+                    // Clear old tracks
+                    const oldTracks = elements.video.querySelectorAll('track');
+                    oldTracks.forEach(t => t.remove());
+                    
+                    // Load video
+                    showProcessing('Loading video...');
+                    elements.video.src = `${SERVER_URL}${currentTrackData.videoUrl}`;
+                    elements.video.load();
+
+                    // Wait for video to be ready
+                    await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => {
+                            reject(new Error('Video loading timed out'));
+                        }, 30000);
+
+                        elements.video.oncanplay = () => {
+                            clearTimeout(timeout);
+                            resolve();
+                        };
+
+                        elements.video.onerror = () => {
+                            clearTimeout(timeout);
+                            reject(new Error('Failed to load video'));
+                        };
+                    });
+
+                    // Load audio if available
+                    if (currentTrackData.audioTracks.length > 0) {
+                        showProcessing('Loading audio...');
+                        elements.audio.src = `${SERVER_URL}${currentTrackData.audioTracks[0].url}`;
+                        elements.audio.load();
+                        await new Promise((resolve) => {
+                            elements.audio.oncanplaythrough = resolve;
+                        });
+                    } else {
+                        elements.audio.src = '';
+                    }
+
+                    // Load subtitles if available
+                    if (currentTrackData.subtitleTracks.length > 0) {
+                        showProcessing('Loading subtitles...');
+                        currentTrackData.subtitleTracks.forEach(sub => {
+                            const track = document.createElement('track');
+                            track.kind = 'subtitles';
+                            track.label = sub.label;
+                            track.src = `${SERVER_URL}${sub.url}`;
+                            track.default = false;
+                            elements.video.appendChild(track);
+                        });
+                    }
+
+                    // Start playback
+                    try {
+                        await elements.video.play();
+                        if (currentTrackData.audioTracks.length > 0) {
+                            elements.audio.currentTime = elements.video.currentTime;
+                            await elements.audio.play();
+                        }
+                    } catch (playError) {
+                        console.error('Playback error:', playError);
+                        // Autoplay might be blocked, but video is still loaded
+                    }
+
+                    // Update UI
+                    populateAudioTracks(0);
+                    populateSubtitleTracks();
+                    hideProcessing();
+
+                } catch (error) {
+                    console.error('Error:', error);
+                    showError(error.message);
+                    showFileSelection();
+                }
+            };
+
+            const populateAudioTracks = (activeIndex = 0) => {
+                elements.audioTracksList.innerHTML = '';
+                if (!currentTrackData || currentTrackData.audioTracks.length === 0) {
+                    elements.audioTracksList.innerHTML = '<p class="text-gray-400">No audio tracks found.</p>';
+                    return;
+                }
+
+                currentTrackData.audioTracks.forEach((track, index) => {
+                    const button = document.createElement('button');
+                    button.className = `w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button ${index === activeIndex ? 'active' : ''}`;
+                    button.textContent = track.label;
+                    button.onclick = () => {
+                        if (index !== activeIndex) {
+                            elements.audio.src = `${SERVER_URL}${track.url}`;
+                            elements.audio.load();
+                            elements.audio.currentTime = elements.video.currentTime;
+                            elements.audio.play().catch(e => console.error('Audio play error:', e));
+                            populateAudioTracks(index);
+                        }
+                        closeAllPanels();
+                    };
+                    elements.audioTracksList.appendChild(button);
+                });
+            };
+
+            const populateSubtitleTracks = () => {
+                elements.subtitleTracksList.innerHTML = '';
+                const textTracks = Array.from(elements.video.textTracks);
+                
+                // Add "Off" option
+                const offButton = document.createElement('button');
+                offButton.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button';
+                offButton.textContent = 'Off';
+                if (textTracks.every(t => t.mode !== 'showing')) {
+                    offButton.classList.add('active');
+                }
+                offButton.onclick = () => {
+                    textTracks.forEach(t => t.mode = 'hidden');
+                    populateSubtitleTracks();
+                    closeAllPanels();
+                };
+                elements.subtitleTracksList.appendChild(offButton);
+
+                if (textTracks.length === 0) {
+                    elements.subtitleTracksList.insertAdjacentHTML('beforeend', '<p class="text-gray-400">No subtitles found.</p>');
+                    return;
+                }
+
+                textTracks.forEach((track, i) => {
+                    const button = document.createElement('button');
+                    button.className = `w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button ${track.mode === 'showing' ? 'active' : ''}`;
+                    button.textContent = track.label || `Subtitle ${i + 1}`;
+                    button.onclick = () => {
+                        textTracks.forEach(t => t.mode = 'hidden');
+                        track.mode = 'showing';
+                        populateSubtitleTracks();
+                        closeAllPanels();
+                    };
+                    elements.subtitleTracksList.appendChild(button);
+                });
+            };
+
+            const showMediaPlayer = () => {
+                elements.localFileSection.classList.add('hidden');
+                elements.videoPlayerSection.classList.remove('hidden');
+                elements.fileError.classList.add('hidden');
+            };
+
+            const showFileSelection = () => {
+                elements.videoPlayerSection.classList.add('hidden');
+                elements.localFileSection.classList.remove('hidden');
+                elements.video.pause();
+                elements.audio.pause();
+                elements.video.src = '';
+                elements.audio.src = '';
+                closeAllPanels();
+            };
+
+            const togglePlayPause = () => {
+                if (elements.video.paused) {
+                    elements.video.play().catch(e => console.error('Video play error:', e));
+                    if (elements.audio.src) {
+                        elements.audio.currentTime = elements.video.currentTime;
+                        elements.audio.play().catch(e => console.error('Audio play error:', e));
+                    }
+                } else {
+                    elements.video.pause();
+                    elements.audio.pause();
+                }
+                resetInactivityTimer();
+            };
+
+            const updateProgressBar = () => {
+                const { currentTime, duration } = elements.video;
+                if (isNaN(duration)) return;
+                
+                elements.progressBar.value = (currentTime / duration) * 100;
+                elements.currentTimeDisplay.textContent = formatTime(currentTime);
+                elements.totalTimeDisplay.textContent = showRemainingTime ? `-${formatTime(duration - currentTime)}` : formatTime(duration);
+                
+                // Sync audio with video
+                if (elements.audio.src && Math.abs(currentTime - elements.audio.currentTime) > 0.2) {
+                    elements.audio.currentTime = currentTime;
+                }
+            };
+
+            const updateDurationDisplay = () => {
+                const { duration } = elements.video;
+                if (isNaN(duration)) return;
+                elements.totalTimeDisplay.textContent = showRemainingTime ? `-${formatTime(duration)}` : formatTime(duration);
+            };
+
+            const seekVideo = (e) => {
+                const time = (e.target.value / 100) * elements.video.duration;
+                elements.video.currentTime = time;
+                if (elements.audio.src) {
+                    elements.audio.currentTime = time;
+                }
+                resetInactivityTimer();
+            };
+
+            const seekRelative = (seconds) => {
+                elements.video.currentTime += seconds;
+                if (elements.audio.src) {
+                    elements.audio.currentTime = elements.video.currentTime;
+                }
+                resetInactivityTimer();
+            };
+
+            const togglePlayerLock = () => {
+                isPlayerLocked = !isPlayerLocked;
+                elements.videoContainer.classList.toggle('locked', isPlayerLocked);
+                if (!isPlayerLocked) {
+                    resetInactivityTimer();
+                }
+            };
+
+            const toggleFullscreen = () => {
+                if (!isFullscreen) {
+                    elements.videoContainer.requestFullscreen().catch(err => {
+                        console.error('Fullscreen error:', err);
+                    });
+                } else {
+                    document.exitFullscreen();
+                }
+            };
+
+            const handleFileSelect = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    playFile(file);
+                }
+                // Reset input to allow selecting the same file again
+                e.target.value = '';
+            };
+
+            const showProcessing = (message) => {
+                elements.processingMessage.textContent = message;
+                elements.processingError.classList.add('hidden');
+                elements.processingOverlay.classList.remove('hidden');
+            };
+
+            const hideProcessing = () => {
+                elements.processingOverlay.classList.add('hidden');
+            };
+
+            const showError = (message) => {
+                elements.processingError.textContent = message;
+                elements.processingError.classList.remove('hidden');
+                elements.fileError.textContent = message;
+                elements.fileError.classList.remove('hidden');
+            };
+
+            const formatTime = (timeInSeconds) => {
+                if (isNaN(timeInSeconds)) return '00:00';
+                const hours = Math.floor(timeInSeconds / 3600);
+                const minutes = Math.floor((timeInSeconds % 3600) / 60);
+                const seconds = Math.floor(timeInSeconds % 60);
+                const parts = [];
+                if (hours > 0) parts.push(String(hours).padStart(2, '0'));
+                parts.push(String(minutes).padStart(2, '0'));
+                parts.push(String(seconds).padStart(2, '0'));
+                return parts.join(':');
+            };
+
+            // Initialize the player
+            initPlayer();
+        });
+    </script>
+</body>
+</html>

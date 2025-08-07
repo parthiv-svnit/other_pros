@@ -1,0 +1,51 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="welcome-header">
+        <h2>Welcome, {{ session['username'] }}!</h2>
+        <p>Your available balance is:</p>
+        <h1 class="balance">${{ "%.2f"|format(user.balance) }}</h1>
+    </div>
+
+    <div class="quick-actions">
+        <a href="{{ url_for('deposit') }}" class="action-btn">Deposit</a>
+        <a href="{{ url_for('withdraw') }}" class="action-btn">Withdraw</a>
+        <a href="{{ url_for('transfer') }}" class="action-btn">Transfer</a>
+    </div>
+
+    <div class="recent-transactions">
+        <h3>Recent Transactions</h3>
+        {% if transactions %}
+            <table class="transaction-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Amount</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for transaction in transactions %}
+                    <tr class="transaction-{{ transaction.type.lower() }}">
+                        <td>{{ transaction.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>{{ transaction.type }}</td>
+                        <!-- **FIX**: Added data-positive attribute for CSS coloring and used abs filter -->
+                        <td class="amount" data-positive="{{ (transaction.amount > 0)|string|lower }}">
+                            ${{ "%.2f"|format(transaction.amount|abs) }}
+                        </td>
+                        <td>{{ transaction.description }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No recent transactions.</p>
+        {% endif %}
+        <div class="full-history-link">
+             <a href="{{ url_for('history') }}">View Full History</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MX Player Clone - Local Player</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FFmpeg.wasm scripts -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js" defer></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .controls-bar {
+            opacity: 1;
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+            visibility: visible;
+        }
+        .video-container.inactive .controls-bar,
+        .video-container.locked .controls-bar {
+            opacity: 0;
+            visibility: hidden;
+        }
+        .video-container.inactive {
+            cursor: none;
+        }
+        .progress-bar-container {
+            position: relative;
+            width: 100%;
+        }
+        .progress-bar {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            outline: none;
+            transition: height 0.2s ease;
+            cursor: pointer;
+        }
+        .progress-bar:hover {
+            height: 6px;
+        }
+        .progress-bar::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #3b82f6;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        .player-lock-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9998; cursor: pointer; display: none;
+        }
+        .video-container.locked .player-lock-overlay {
+            display: block;
+        }
+        .unlock-button {
+            position: absolute; top: 2rem; right: 2rem; background: rgba(0,0,0,0.7); color: white; padding: 1rem; border-radius: 50%; z-index: 9999; cursor: pointer; 
+        }
+        #local-file-section.hidden { display: none; }
+        #video-player-section.active { display: block; }
+
+        .seek-overlay {
+            position: absolute; top: 0; bottom: 0; width: 40%; z-index: 10;
+        }
+        .side-panel {
+            transition: transform 0.3s ease-in-out;
+            transform: translateX(100%);
+        }
+        .side-panel.open {
+            transform: translateX(0);
+        }
+        #progress-tooltip {
+            position: absolute;
+            bottom: 20px;
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            transform: translateX(-50%);
+            display: none;
+        }
+        #preview-canvas {
+            position: absolute;
+            bottom: 30px; /* Position above tooltip */
+            border: 2px solid white;
+            border-radius: 4px;
+            pointer-events: none;
+            transform: translateX(-50%);
+            display: none;
+        }
+        /* Fullscreen floating controls */
+        .is-fullscreen .bottom-controls {
+            position: absolute;
+            bottom: 5%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 800px;
+            background-color: rgba(0,0,0,0.6);
+            border-radius: 12px;
+            padding: 1rem;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        .is-fullscreen .top-controls {
+            display: none;
+        }
+        .track-button.active {
+            background-color: #3b82f6;
+        }
+        #processing-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #processing-overlay.hidden {
+            display: none;
+        }
+        /* Subtitle styling */
+        video::cue {
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-size: 1.2em;
+            text-shadow: px 1px 2px black;
+            font-family: 'Inter', sans-serif;
+        }
+
+        video::-webkit-media-text-track-display {
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 0.5em;
+            border-radius: 4px;
+        }
+
+        /* Audio track styling */
+        .audio-track-item {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            transition: background-color 0.2s;
+        }
+
+        .audio-track-item:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .audio-track-item.active {
+            background-color: #3b82f6;
+        }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <div id="app-container" class="w-full h-screen flex flex-col items-center justify-center bg-[#121212]">
+        
+        <div id="local-file-section" class="text-center p-8">
+            <h1 class="text-5xl font-bold text-white mb-4"><span class="text-blue-500">MX</span> Player</h1>
+            <p class="text-gray-400 mb-8 text-lg">Your Personal Video Player</p>
+            <button id="open-file-btn" class="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-700 transition text-xl shadow-lg shadow-blue-500/20">
+                <i class="fas fa-folder-open mr-3"></i> Open Video(s)
+            </button>
+            <input type="file" id="local-file-input" accept="video/*,.mkv" class="hidden" multiple>
+        </div>
+
+        <div id="video-player-section" class="w-full h-full bg-black hidden">
+            <div id="video-container" class="relative w-full h-full bg-black video-container">
+                <video id="main-video" class="w-full h-full object-contain" crossorigin="anonymous"></video>
+                <video id="preview-video" class="hidden absolute"></video>
+                <audio id="main-audio"></audio>
+                
+                <div id="seek-backward-overlay" class="seek-overlay left-0"></div>
+                <div id="seek-forward-overlay" class="seek-overlay right-0"></div>
+
+                <div class="controls-bar top-controls absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-20">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-4">
+                            <button id="back-btn" class="text-white text-xl px-2"><i class="fas fa-arrow-left"></i></button>
+                            <h2 id="video-title" class="text-white text-lg font-semibold truncate max-w-xs md:max-w-md lg:max-w-lg"></h2>
+                        </div>
+                        <div class="flex items-center space-x-5">
+                            <button id="audio-tracks-btn" class="text-white text-xl"><i class="fas fa-music"></i></button>
+                            <button id="subtitle-tracks-btn" class="text-white text-xl"><i class="fas fa-closed-captioning"></i></button>
+                            <button id="menu-btn" class="text-white text-xl px-2"><i class="fas fa-ellipsis-v"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls-bar bottom-controls w-full absolute bottom-0 left-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-20">
+                    <div class="w-full mb-3">
+                        <div class="flex justify-between items-center text-xs font-mono text-white px-1">
+                            <span id="current-time">00:00</span>
+                            <span id="total-time" class="cursor-pointer" title="Click to show remaining time">00:00</span>
+                        </div>
+                        <div class="progress-bar-container px-0">
+                           <canvas id="preview-canvas" width="160" height="90"></canvas>
+                           <div id="progress-tooltip">00:00</div>
+                           <input type="range" id="progress-bar" class="progress-bar" value="0" min="0" max="100">
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                        <button id="lock-btn" class="text-white text-2xl px-2"><i class="fas fa-lock"></i></button>
+                        <div class="flex items-center justify-center space-x-6">
+                            <button id="seek-backward-10-btn" class="text-white text-2xl"><i class="fas fa-undo"></i></button>
+                            <button id="prev-btn" class="text-white text-3xl"><i class="fas fa-backward-step"></i></button>
+                            <button id="play-pause-btn" class="text-white text-5xl"><i class="fas fa-play-circle"></i></button>
+                            <button id="next-btn" class="text-white text-3xl"><i class="fas fa-forward-step"></i></button>
+                            <button id="seek-forward-10-btn" class="text-white text-2xl"><i class="fas fa-redo"></i></button>
+                        </div>
+                        <button id="fullscreen-btn" class="text-white text-2xl px-2"><i class="fas fa-expand-arrows-alt"></i></button>
+                    </div>
+                </div>
+                
+                <div id="player-lock-overlay" class="player-lock-overlay">
+                    <button id="unlock-btn" class="unlock-button"><i class="fas fa-lock-open fa-lg"></i></button>
+                </div>
+
+                <!-- Side Panels -->
+                <div id="menu-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4">
+                    <h3 class="text-lg font-bold mb-4">Settings</h3>
+                    <div class="space-y-6">
+                        <div>
+                            <label class="font-semibold">Playback Speed</label>
+                            <div class="flex space-x-2 mt-2">
+                                <button class="speed-option flex-1 bg-gray-700/50 p-2 rounded" data-speed="0.5">0.5x</button>
+                                <button class="speed-option flex-1 bg-blue-600 p-2 rounded" data-speed="1">1x</button>
+                                <button class="speed-option flex-1 bg-gray-700/50 p-2 rounded" data-speed="1.5">1.5x</button>
+                                <button class="speed-option flex-1 bg-gray-700/50 p-2 rounded" data-speed="2">2x</button>
+                            </div>
+                        </div>
+                         <div>
+                            <label class="font-semibold">Aspect Ratio</label>
+                            <div class="flex space-x-2 mt-2">
+                                <button class="aspect-ratio-option flex-1 bg-blue-600 p-2 rounded" data-ratio="contain">Fit</button>
+                                <button class="aspect-ratio-option flex-1 bg-gray-700/50 p-2 rounded" data-ratio="cover">Crop</button>
+                                <button class="aspect-ratio-option flex-1 bg-gray-700/50 p-2 rounded" data-ratio="fill">Stretch</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="audio-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4">
+                    <h3 class="text-lg font-bold mb-4">Audio Tracks</h3>
+                    <div id="audio-tracks-list" class="space-y-2"></div>
+                </div>
+                <div id="subtitle-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-sm z-30 p-4">
+                    <h3 class="text-lg font-bold mb-4">Subtitle Tracks</h3>
+                    <div id="subtitle-tracks-list" class="space-y-2"></div>
+                     <button id="custom-subtitle-btn" class="w-full text-left font-semibold bg-gray-700/50 p-3 rounded flex items-center justify-between mt-4">
+                        <span>Load Custom</span><i class="fas fa-plus"></i>
+                    </button>
+                    <input type="file" id="subtitle-input" accept=".vtt,.srt" class="hidden">
+                </div>
+            </div>
+        </div>
+
+        <!-- Processing Overlay -->
+        <div id="processing-overlay" class="hidden">
+            <div class="text-white text-center">
+                <i class="fas fa-spinner fa-spin fa-3x mb-4"></i>
+                <p id="processing-message" class="text-lg">Processing video...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            let ffmpeg;
+            let ffmpegLoadPromise = null;
+
+            const elements = {
+                appContainer: document.getElementById('app-container'),
+                localFileSection: document.getElementById('local-file-section'),
+                videoPlayerSection: document.getElementById('video-player-section'),
+                video: document.getElementById('main-video'),
+                previewVideo: document.getElementById('preview-video'),
+                previewCanvas: document.getElementById('preview-canvas'),
+                audio: document.getElementById('main-audio'),
+                videoContainer: document.getElementById('video-container'),
+                videoTitle: document.getElementById('video-title'),
+                playPauseBtn: document.getElementById('play-pause-btn'),
+                progressBar: document.getElementById('progress-bar'),
+                progressTooltip: document.getElementById('progress-tooltip'),
+                currentTimeDisplay: document.getElementById('current-time'),
+                totalTimeDisplay: document.getElementById('total-time'),
+                fullscreenBtn: document.getElementById('fullscreen-btn'),
+                backBtn: document.getElementById('back-btn'),
+                lockBtn: document.getElementById('lock-btn'),
+                unlockBtn: document.getElementById('unlock-btn'),
+                playerLockOverlay: document.getElementById('player-lock-overlay'),
+                openFileBtn: document.getElementById('open-file-btn'),
+                localFileInput: document.getElementById('local-file-input'),
+                nextBtn: document.getElementById('next-btn'),
+                prevBtn: document.getElementById('prev-btn'),
+                seekBackwardOverlay: document.getElementById('seek-backward-overlay'),
+                seekForwardOverlay: document.getElementById('seek-forward-overlay'),
+                seekBackward10Btn: document.getElementById('seek-backward-10-btn'),
+                seekForward10Btn: document.getElementById('seek-forward-10-btn'),
+                menuBtn: document.getElementById('menu-btn'),
+                menuPanel: document.getElementById('menu-panel'),
+                speedOptions: document.querySelectorAll('.speed-option'),
+                aspectRatioOptions: document.querySelectorAll('.aspect-ratio-option'),
+                audioTracksBtn: document.getElementById('audio-tracks-btn'),
+                audioTracksPanel: document.getElementById('audio-tracks-panel'),
+                audioTracksList: document.getElementById('audio-tracks-list'),
+                subtitleTracksBtn: document.getElementById('subtitle-tracks-btn'),
+                subtitleTracksPanel: document.getElementById('subtitle-tracks-panel'),
+                subtitleTracksList: document.getElementById('subtitle-tracks-list'),
+                customSubtitleBtn: document.getElementById('custom-subtitle-btn'),
+                subtitleInput: document.getElementById('subtitle-input'),
+                processingOverlay: document.getElementById('processing-overlay'),
+                processingMessage: document.getElementById('processing-message'),
+            };
+
+            let inactivityTimer, playlist = [], currentVideoIndex = 0, showRemainingTime = false;
+            let currentFile, videoInfo = { audio: [], subtitle: [], audioUrls: [] };
+
+            const initFFmpeg = () => {
+                if (ffmpegLoadPromise) return ffmpegLoadPromise;
+                ffmpegLoadPromise = new Promise((resolve, reject) => {
+                    const checkInterval = setInterval(async () => {
+                        if (typeof FFmpeg !== 'undefined') {
+                            clearInterval(checkInterval);
+                            try {
+                                const { FFmpeg: FFmpegCore } = FFmpeg;
+                                ffmpeg = new FFmpegCore();
+                                ffmpeg.on('log', ({ message }) => {
+                                    if (message.includes('Stream #')) {
+                                        const streamMatch = message.match(/Stream #\d+:(\d+).*?: (\w+):/);
+                                        if (streamMatch) {
+                                            const [, streamIndex, streamType] = streamMatch;
+                                            if (streamType === 'Audio') videoInfo.audio.push({ index: streamIndex, label: message });
+                                            else if (streamType === 'Subtitle') videoInfo.subtitle.push({ index: streamIndex, label: message });
+                                        }
+                                    }
+                                });
+                                ffmpeg.on('progress', ({ progress }) => {
+                                    if (elements.processingMessage && progress > 0 && progress <= 1) {
+                                        elements.processingMessage.textContent = `Loading Video Engine... ${Math.round(progress * 100)}%`;
+                                    }
+                                });
+                                await ffmpeg.load({ coreURL: "https://unpkg.com/@ffmpeg/core-st@0.12.6/dist/umd/ffmpeg-core.js" });
+                                resolve(true);
+                            } catch (error) { reject(error); }
+                        }
+                    }, 100);
+                });
+                return ffmpegLoadPromise;
+            };
+            
+            const processFileWithFFmpeg = async (file) => {
+                elements.processingOverlay.classList.remove('hidden');
+                try {
+                    elements.processingMessage.textContent = 'Initializing advanced video processor...';
+                    await initFFmpeg();
+
+                    currentFile = file;
+                    videoInfo = { audio: [], subtitle: [], audioUrls: [] };
+                    
+                    elements.processingMessage.textContent = 'Analyzing video file...';
+                    const fileData = new Uint8Array(await file.arrayBuffer());
+                    await ffmpeg.writeFile(file.name, fileData);
+                    await ffmpeg.exec(['-i', file.name]);
+
+                    elements.processingMessage.textContent = 'Extracting video stream...';
+                    await ffmpeg.exec(['-i', file.name, '-c:v', 'copy', '-an', '-sn', 'video_only.mp4']);
+                    const videoData = await ffmpeg.readFile('video_only.mp4');
+                    const videoBlob = new Blob([videoData.buffer], { type: 'video/mp4' });
+                    const videoUrl = URL.createObjectURL(videoBlob);
+                    elements.video.src = videoUrl;
+                    elements.previewVideo.src = videoUrl;
+                    elements.video.load();
+                    elements.video.play();
+
+                    for (let i = 0; i < videoInfo.audio.length; i++) {
+                        elements.processingMessage.textContent = `Extracting audio track ${i + 1}/${videoInfo.audio.length}...`;
+                        const audioFileName = `audio_${i}.aac`;
+                        await ffmpeg.exec(['-i', file.name, '-map', `0:a:${i}`, '-c:a', 'aac', audioFileName]);
+                        const audioData = await ffmpeg.readFile(audioFileName);
+                        const audioBlob = new Blob([audioData.buffer], { type: 'audio/aac' });
+                        videoInfo.audioUrls.push(URL.createObjectURL(audioBlob));
+                    }
+                    if (videoInfo.audioUrls.length > 0) {
+                        elements.audio.src = videoInfo.audioUrls[0];
+                        elements.audio.load();
+                    }
+                    
+                    const oldTracks = elements.video.querySelectorAll('track');
+                    oldTracks.forEach(track => track.remove());
+                    for (let i = 0; i < videoInfo.subtitle.length; i++) {
+                        elements.processingMessage.textContent = `Extracting subtitle track ${i + 1}/${videoInfo.subtitle.length}...`;
+                        const subFileName = `sub_${i}.vtt`;
+                        await ffmpeg.exec(['-i', file.name, '-map', `0:s:${i}`, subFileName]);
+                        const subData = await ffmpeg.readFile(subFileName);
+                        const subBlob = new Blob([subData.buffer], { type: 'text/vtt' });
+                        const subUrl = URL.createObjectURL(subBlob);
+                        const track = document.createElement('track');
+                        track.kind = 'subtitles';
+                        track.label = `Track ${i+1}`;
+                        track.src = subUrl;
+                        track.default = (i === 0); // Set first track as default
+                        elements.video.appendChild(track);
+                    }
+                    
+                    populateAudioTracksFromFFmpeg(0);
+                    populateSubtitleTracksFromFFmpeg();
+
+                } catch (error) {
+                    console.error('FFmpeg processing error:', error);
+                    alert('Failed to process video file.');
+                } finally {
+                    elements.processingOverlay.classList.add('hidden');
+                }
+            };
+
+            const playFileDirectly = (file) => {
+                const url = URL.createObjectURL(file);
+                elements.video.src = url;
+                elements.previewVideo.src = url;
+                
+                // Clear existing tracks
+                const oldTracks = elements.video.querySelectorAll('track');
+                oldTracks.forEach(track => track.remove());
+                
+                elements.video.load();
+                
+                const playPromise = elements.video.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(error => {
+                        if (error.name === 'NotSupportedError') {
+                            console.warn("Direct play failed, falling back to FFmpeg.", error);
+                            processFileWithFFmpeg(file);
+                        }
+                    });
+                }
+                
+                // New event listener for track handling
+                elements.video.addEventListener('loadedmetadata', () => {
+                    // Enable built-in tracks
+                    if (elements.video.audioTracks) {
+                        // Enable first audio track by default
+                        if (elements.video.audioTracks.length > 0) {
+                            elements.video.audioTracks[0].enabled = true;
+                        }
+                    }
+                    
+                    if (elements.video.textTracks) {
+                        // Enable first subtitle track by default
+                        for (let i = 0; i < elements.video.textTracks.length; i++) {
+                            elements.video.textTracks[i].mode = i === 0 ? 'showing' : 'disabled';
+                        }
+                    }
+                    
+                    populateAudioTracksDirectly();
+                    populateSubtitleTracksDirectly();
+                }, { once: true });
+            };
+
+            const populateAudioTracksFromFFmpeg = (activeIndex = 0) => {
+                elements.audioTracksList.innerHTML = '';
+                if (videoInfo.audio.length === 0) {
+                    elements.audioTracksList.innerHTML = '<p class="text-gray-400">No audio tracks found.</p>';
+                    return;
+                }
+                videoInfo.audio.forEach((track, index) => {
+                    const button = document.createElement('button');
+                    button.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button';
+                    button.textContent = track.label.match(/Stream.*\((\w+)\)/)?.[0] || `Track ${index + 1}`;
+                    if (index === activeIndex) button.classList.add('active');
+                    button.onclick = () => {
+                        if (index !== activeIndex) {
+                            elements.audio.src = videoInfo.audioUrls[index];
+                            elements.audio.load();
+                            populateAudioTracksFromFFmpeg(index);
+                        }
+                    };
+                    elements.audioTracksList.appendChild(button);
+                });
+            };
+            
+            const populateAudioTracksDirectly = () => {
+                elements.audioTracksList.innerHTML = '';
+                
+                if (!elements.video.audioTracks || elements.video.audioTracks.length === 0) {
+                    elements.audioTracksList.innerHTML = '<p class="text-gray-400">No alternate audio tracks found</p>';
+                    return;
+                }
+
+                // Create track buttons for each audio track
+                Array.from(elements.video.audioTracks).forEach((track, index) => {
+                    const button = document.createElement('button');
+                    button.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button';
+                    
+                    // Try to get track language or use generic label
+                    const label = track.language ? `Audio (${track.language})` : `Audio Track ${index + 1}`;
+                    button.textContent = label;
+                    
+                    if (track.enabled) {
+                        button.classList.add('active');
+                    }
+                    
+                    button.onclick = () => {
+                        // Disable all tracks first
+                        Array.from(elements.video.audioTracks).forEach(t => t.enabled = false);
+                        // Enable selected track
+                        track.enabled = true;
+                        populateAudioTracksDirectly();
+                    };
+                    
+                    elements.audioTracksList.appendChild(button);
+                });
+            };
+
+            const populateSubtitleTracksFromFFmpeg = () => populateSubtitleTracksDirectly();
+            const populateSubtitleTracksDirectly = () => {
+                elements.subtitleTracksList.innerHTML = '';
+                const textTracks = elements.video.textTracks;
+
+                // Add "Off" option
+                const offButton = document.createElement('button');
+                offButton.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button';
+                offButton.textContent = 'Off';
+                offButton.onclick = () => {
+                    Array.from(textTracks).forEach(t => t.mode = 'disabled');
+                    populateSubtitleTracksDirectly();
+                };
+                
+                // Highlight if no tracks are showing
+                const isAnyTrackShowing = Array.from(textTracks).some(t => t.mode === 'showing');
+                if (!isAnyTrackShowing) {
+                    offButton.classList.add('active');
+                }
+                elements.subtitleTracksList.appendChild(offButton);
+
+                if (textTracks.length === 0) {
+                    elements.subtitleTracksList.innerHTML += '<p class="text-gray-400">No subtitles available</p>';
+                } else {
+                    Array.from(textTracks).forEach((track, i) => {
+                        // Skip tracks that failed to load
+                        if (track.kind !== 'subtitles') return;
+                        
+                        const button = document.createElement('button');
+                        button.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded track-button';
+                        
+                        // Use track label or generate one
+                        button.textContent = track.label || `Subtitle ${i + 1}`;
+                        
+                        if (track.mode === 'showing') {
+                            button.classList.add('active');
+                        }
+                        
+                        button.onclick = () => {
+                            Array.from(textTracks).forEach(t => t.mode = 'disabled');
+                            track.mode = 'showing';
+                            populateSubtitleTracksDirectly();
+                        };
+                        
+                        elements.subtitleTracksList.appendChild(button);
+                    });
+                }
+            };
+
+            const closeAllPanels = () => document.querySelectorAll('.side-panel.open').forEach(p => p.classList.remove('open'));
+            const togglePanel = (panel) => {
+                const isOpen = panel.classList.contains('open');
+                closeAllPanels();
+                if (!isOpen) panel.classList.add('open');
+            };
+
+            function hideControls() {
+                if (elements.video.paused) return;
+                elements.videoContainer?.classList.add('inactive');
+            }
+            function resetInactivityTimer() {
+                elements.videoContainer?.classList.remove('inactive');
+                clearTimeout(inactivityTimer);
+                inactivityTimer = setTimeout(hideControls, 2500);
+            }
+
+            function showMediaPlayer() {
+                elements.localFileSection?.classList.add('hidden');
+                elements.videoPlayerSection?.classList.add('active');
+                elements.appContainer?.requestFullscreen().catch(err => console.warn("Could not enter fullscreen automatically."));
+                resetInactivityTimer();
+            }
+            function showFileSelection() {
+                elements.videoPlayerSection?.classList.remove('active');
+                elements.localFileSection?.classList.remove('hidden');
+                if (elements.video) { elements.video.pause(); elements.video.src = ''; }
+                if (elements.audio) { elements.audio.pause(); elements.audio.src = ''; }
+                if (elements.videoTitle) elements.videoTitle.textContent = '';
+                playlist = [];
+                currentVideoIndex = 0;
+                if (document.fullscreenElement) document.exitFullscreen();
+                clearTimeout(inactivityTimer);
+            }
+
+            function updatePlaylistControls() {
+                if (elements.prevBtn) elements.prevBtn.disabled = currentVideoIndex === 0;
+                if (elements.nextBtn) elements.nextBtn.disabled = currentVideoIndex >= playlist.length - 1;
+                if (elements.prevBtn) elements.prevBtn.style.opacity = elements.prevBtn.disabled ? '0.5' : '1';
+                if (elements.nextBtn) elements.nextBtn.style.opacity = elements.nextBtn.disabled ? '0.5' : '1';
+            }
+
+            function playFileFromPlaylist(index) {
+                if (index < 0 || index >= playlist.length) return;
+                currentVideoIndex = index;
+                const file = playlist[currentVideoIndex];
+                currentFile = file;
+                if (elements.videoTitle) elements.videoTitle.textContent = file.name;
+                
+                const oldTracks = elements.video.querySelectorAll('track');
+                oldTracks.forEach(track => track.remove());
+
+                playFileDirectly(file);
+
+                updatePlaylistControls();
+            }
+
+            function playNext() { if (currentVideoIndex < playlist.length - 1) playFileFromPlaylist(currentVideoIndex + 1); }
+            function playPrev() { if (currentVideoIndex > 0) playFileFromPlaylist(currentVideoIndex - 1); }
+
+            function togglePlayPause() { 
+                if (elements.video.paused) {
+                    elements.video.play();
+                    elements.audio.play();
+                } else {
+                    elements.video.pause();
+                    elements.audio.pause();
+                }
+            }
+            function updatePlayPauseIcon() {
+                if (!elements.video || !elements.playPauseBtn) return;
+                elements.playPauseBtn.innerHTML = `<i class="fas ${elements.video.paused ? 'fa-play-circle' : 'fa-pause-circle'}"></i>`;
+                if (elements.video.paused) {
+                    clearTimeout(inactivityTimer);
+                    elements.videoContainer?.classList.remove('inactive');
+                } else {
+                    resetInactivityTimer();
+                }
+            }
+            function handleProgress() {
+                if (!elements.video || !elements.progressBar || isNaN(elements.video.duration)) return;
+                elements.progressBar.value = (elements.video.currentTime / elements.video.duration) * 100;
+            }
+            function scrub() {
+                if(elements.video && !isNaN(elements.video.duration) && elements.progressBar) {
+                    const newTime = (elements.video.duration / 100) * elements.progressBar.value;
+                    elements.video.currentTime = newTime;
+                    elements.audio.currentTime = newTime;
+                }
+            }
+            function formatTime(timeInSeconds, videoDuration) {
+                if (isNaN(timeInSeconds)) return '00:00';
+                const duration = videoDuration || timeInSeconds;
+                const hours = Math.floor(timeInSeconds / 3600);
+                const minutes = Math.floor((timeInSeconds % 3600) / 60);
+                const seconds = Math.floor(timeInSeconds % 60);
+
+                const formattedMinutes = String(minutes).padStart(2, '0');
+                const formattedSeconds = String(seconds).padStart(2, '0');
+
+                if (duration >= 3600) {
+                    return `${String(hours).padStart(2, '0')}:${formattedMinutes}:${formattedSeconds}`;
+                }
+                return `${formattedMinutes}:${formattedSeconds}`;
+            }
+            function convertSrtToVtt(srtText) {
+                // Remove UTF-8 BOM if exists
+                srtText = srtText.replace(/^\uFEFF/, '');
+                
+                // Add VTT header
+                let vttText = 'WEBVTT\n\n';
+                
+                // Process each subtitle block
+                const blocks = srtText.split(/\r?\n\r?\n/);
+                blocks.forEach(block => {
+                    if (block.trim() === '') return;
+                    
+                    // Split block into lines
+                    const lines = block.split(/\r?\n/);
+                    if (lines.length < 2) return;
+                    
+                    // Skip sequence number
+                    const timeLine = lines[1].trim();
+                    
+                    // Convert SRT timestamps to VTT format
+                    const vttTimeLine = timeLine
+                        .replace(/,/g, '.')
+                        .replace(/(\d{2}:\d{2}:\d{2})\.(\d{3})/g, '$1.$2');
+                    
+                    // Add processed block to VTT
+                    vttText += vttTimeLine + '\n';
+                    
+                    // Add subtitle text
+                    for (let i = 2; i < lines.length; i++) {
+                        vttText += lines[i] + '\n';
+                    }
+                    
+                    vttText += '\n';
+                });
+                
+                return vttText;
+            }
+            function updateTimeDisplay() {
+                if (elements.currentTimeDisplay && elements.totalTimeDisplay && elements.video && !isNaN(elements.video.duration)) {
+                    elements.currentTimeDisplay.textContent = formatTime(elements.video.currentTime, elements.video.duration);
+                    if (showRemainingTime) {
+                        const remainingTime = elements.video.duration - elements.video.currentTime;
+                        elements.totalTimeDisplay.textContent = `-${formatTime(remainingTime, elements.video.duration)}`;
+                    } else {
+                        elements.totalTimeDisplay.textContent = formatTime(elements.video.duration);
+                    }
+                }
+            }
+            function toggleFullScreen() {
+                if (!document.fullscreenElement) {
+                    elements.appContainer?.requestFullscreen().catch(err => console.error(`Error: ${err.message}`));
+                } else {
+                    document.exitFullscreen();
+                }
+            }
+            function loadCustomSubtitle(e) {
+                const file = e.target.files[0];
+                if (file && elements.video) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const track = document.createElement('track');
+                        track.kind = 'subtitles';
+                        track.label = `Custom: ${file.name.replace(/\.[^/.]+$/, "")}`; // Remove file extension
+                        track.srclang = 'custom';
+                        
+                        // Create blob URL for the subtitle file
+                        const subBlob = new Blob([e.target.result], { type: 'text/vtt' });
+                        track.src = URL.createObjectURL(subBlob);
+                        
+                        // Add to video element
+                        elements.video.appendChild(track);
+                        
+                        // Wait for track to load
+                        track.addEventListener('load', () => {
+                            // Disable all other tracks
+                            Array.from(elements.video.textTracks).forEach(t => {
+                                if (t !== track) t.mode = 'disabled';
+                            });
+                            // Enable our custom track
+                            track.mode = 'showing';
+                            populateSubtitleTracksDirectly();
+                        });
+                    };
+                    
+                    // Read the file based on its type
+                    if (file.name.endsWith('.srt')) {
+                        // Convert SRT to VTT if needed
+                        reader.readAsText(file);
+                    } else {
+                        // Directly read VTT files
+                        reader.readAsText(file);
+                    }
+                }
+                // Reset input to allow loading same file again
+                e.target.value = '';
+            }
+            function togglePlayerLock(e) {
+                e.stopPropagation();
+                elements.videoContainer?.classList.toggle('locked');
+            }
+            
+            function changeAspectRatio(ratio) {
+                if(elements.video) elements.video.style.objectFit = ratio;
+                 elements.aspectRatioOptions.forEach(opt => opt.classList.replace('bg-blue-600', 'bg-gray-700/50'));
+                document.querySelector(`.aspect-ratio-option[data-ratio="${ratio}"]`)?.classList.replace('bg-gray-700/50', 'bg-blue-600');
+            }
+
+            function seekVideo(seconds) {
+                if (!elements.video) return;
+                const newTime = elements.video.currentTime + seconds;
+                elements.video.currentTime = newTime;
+                elements.audio.currentTime = newTime;
+            }
+            function handleKeyDown(e) {
+                if (!elements.video || !elements.video.src || elements.videoContainer.classList.contains('locked')) return;
+                switch(e.key.toLowerCase()) {
+                    case ' ': e.preventDefault(); togglePlayPause(); break;
+                    case 'f': toggleFullScreen(); break;
+                    case 'arrowright': seekVideo(5); break;
+                    case 'arrowleft': seekVideo(-5); break;
+                    case 'arrowup': e.preventDefault(); if (elements.video) elements.video.volume = Math.min(1, elements.video.volume + 0.1); break;
+                    case 'arrowdown': e.preventDefault(); if (elements.video) elements.video.volume = Math.max(0, elements.video.volume - 0.1); break;
+                }
+            }
+            
+            // --- Event Listeners ---
+            document.addEventListener('keydown', handleKeyDown);
+            document.addEventListener('fullscreenchange', () => {
+                elements.appContainer?.classList.toggle('is-fullscreen', !!document.fullscreenElement);
+            });
+
+            elements.openFileBtn?.addEventListener('click', () => elements.localFileInput?.click());
+            elements.localFileInput?.addEventListener('change', (e) => {
+                playlist = Array.from(e.target.files);
+                if(playlist.length > 0) playFileFromPlaylist(0);
+                showMediaPlayer();
+            });
+
+            elements.videoContainer?.addEventListener('mousemove', resetInactivityTimer);
+            elements.videoContainer?.addEventListener('click', (e) => {
+                if (e.target === elements.videoContainer || e.target === elements.video) {
+                    if (document.querySelector('.side-panel.open')) {
+                        closeAllPanels();
+                    } else {
+                         elements.videoContainer.classList.toggle('inactive');
+                    }
+                }
+            });
+
+            elements.backBtn?.addEventListener('click', showFileSelection);
+            elements.playPauseBtn?.addEventListener('click', togglePlayPause);
+            elements.video?.addEventListener('play', () => { updatePlayPauseIcon(); elements.audio.play(); });
+            elements.video?.addEventListener('pause', () => { updatePlayPauseIcon(); elements.audio.pause(); });
+            elements.video?.addEventListener('timeupdate', () => {
+                updateTimeDisplay();
+                handleProgress();
+                if (elements.audio.src && Math.abs(elements.video.currentTime - elements.audio.currentTime) > 0.2) {
+                    elements.audio.currentTime = elements.video.currentTime;
+                }
+            });
+            elements.video?.addEventListener('loadedmetadata', updateTimeDisplay);
+            elements.video?.addEventListener('ended', playNext);
+            elements.video.onerror = (e) => {
+                console.error("Video error, trying FFmpeg fallback.", e);
+                processFileWithFFmpeg(currentFile);
+            };
+            
+            elements.progressBar?.addEventListener('input', scrub);
+            elements.progressBar?.addEventListener('mousemove', (e) => {
+                if (!elements.video || isNaN(elements.video.duration)) return;
+                const rect = elements.progressBar.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const percentage = x / rect.width;
+                const time = elements.video.duration * percentage;
+                if (elements.progressTooltip) {
+                    elements.progressTooltip.style.left = `${x}px`;
+                    elements.progressTooltip.textContent = formatTime(time, elements.video.duration);
+                    elements.progressTooltip.style.display = 'block';
+                }
+                if (elements.previewVideo && elements.previewCanvas) {
+                    elements.previewVideo.currentTime = time;
+                    elements.previewCanvas.style.left = `${x}px`;
+                    elements.previewCanvas.style.display = 'block';
+                }
+            });
+            elements.progressBar?.addEventListener('mouseleave', () => {
+                if (elements.progressTooltip) elements.progressTooltip.style.display = 'none';
+                if (elements.previewCanvas) elements.previewCanvas.style.display = 'none';
+            });
+            elements.previewVideo?.addEventListener('seeked', () => {
+                 if (elements.previewCanvas) {
+                    const ctx = elements.previewCanvas.getContext('2d');
+                    ctx.drawImage(elements.previewVideo, 0, 0, elements.previewCanvas.width, elements.previewCanvas.height);
+                }
+            });
+
+            elements.fullscreenBtn?.addEventListener('click', toggleFullScreen);
+            elements.lockBtn?.addEventListener('click', togglePlayerLock);
+            elements.unlockBtn?.addEventListener('click', togglePlayerLock);
+            elements.totalTimeDisplay?.addEventListener('click', () => {
+                showRemainingTime = !showRemainingTime;
+                updateTimeDisplay();
+            });
+            
+            elements.nextBtn?.addEventListener('click', playNext);
+            elements.prevBtn?.addEventListener('click', playPrev);
+            
+            elements.seekBackward10Btn?.addEventListener('click', () => seekVideo(-10));
+            elements.seekForward10Btn?.addEventListener('click', () => seekVideo(10));
+            elements.seekBackwardOverlay?.addEventListener('dblclick', () => seekVideo(-10));
+            elements.seekForwardOverlay?.addEventListener('dblclick', () => seekVideo(10));
+
+            elements.menuBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(elements.menuPanel); });
+            elements.audioTracksBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(elements.audioTracksPanel); });
+            elements.subtitleTracksBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePanel(elements.subtitleTracksPanel); });
+            elements.customSubtitleBtn?.addEventListener('click', () => elements.subtitleInput?.click());
+            elements.subtitleInput?.addEventListener('change', loadCustomSubtitle);
+
+            elements.speedOptions?.forEach(option => {
+                option.addEventListener('click', () => {
+                    elements.speedOptions.forEach(opt => opt.classList.replace('bg-blue-600', 'bg-gray-700/50'));
+                    option.classList.replace('bg-gray-700/50', 'bg-blue-600');
+                    if(elements.video) elements.video.playbackRate = parseFloat(option.dataset.speed);
+                    if(elements.audio) elements.audio.playbackRate = parseFloat(option.dataset.speed);
+                });
+            });
+            elements.aspectRatioOptions?.forEach(option => {
+                option.addEventListener('click', () => changeAspectRatio(option.dataset.ratio));
+            });
+
+            // Pre-load FFmpeg in the background as soon as the page is ready
+            initFFmpeg().then(() => {
+                console.log("FFmpeg core loaded.");
+            }).catch(err => {
+                console.error("Failed to load FFmpeg core:", err);
+            });
+        });
+    </script>
+</body>
+</html>
